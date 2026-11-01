@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from time import perf_counter
 
 import discord
 from discord import app_commands
@@ -11,6 +12,7 @@ from store import RankingStore
 
 
 logger = logging.getLogger(__name__)
+BOARD_REFRESH_DEBOUNCE_SECONDS = 0.25
 
 
 def _is_admin(interaction, admin_role_id=None):
@@ -42,22 +44,35 @@ class RankingBot(commands.Bot):
         self.admin_role_id = admin_role_id
         self.store = store or RankingStore()
         self.board_lock = asyncio.Lock()
+        self._board_refresh_requested = False
+        self._board_refresh_task = None
 
     async def setup_hook(self):
         await self.tree.sync(guild=discord.Object(id=self.guild_id))
 
     async def refresh_board(self):
         async with self.board_lock:
+            total_started = perf_counter()
+            stage_started = total_started
             channel = self.get_channel(self.channel_id)
             if channel is None:
                 channel = await self.fetch_channel(self.channel_id)
             members = await asyncio.to_thread(self.store.list_members)
+            members_seconds = perf_counter() - stage_started
+
+            stage_started = perf_counter()
             image = await asyncio.to_thread(render_board, members)
+            render_seconds = perf_counter() - stage_started
+
+            stage_started = perf_counter()
             settings = await asyncio.to_thread(
                 self.store.get_settings,
                 self.guild_id,
                 self.channel_id,
             )
+            settings_seconds = perf_counter() - stage_started
+
+            stage_started = perf_counter()
             message = None
             message_id = settings.get("message_id")
             if message_id:
@@ -76,6 +91,38 @@ class RankingBot(commands.Bot):
                 )
             else:
                 await message.edit(content="보스 길드 전투력 순위", attachments=[file])
+            logger.info(
+                "Ranking refresh timing: members=%.3fs render=%.3fs "
+                "settings=%.3fs discord=%.3fs total=%.3fs",
+                members_seconds,
+                render_seconds,
+                settings_seconds,
+                perf_counter() - stage_started,
+                perf_counter() - total_started,
+            )
+
+    def schedule_board_refresh(self):
+        self._board_refresh_requested = True
+        if self._board_refresh_task is None or self._board_refresh_task.done():
+            self._board_refresh_task = asyncio.create_task(
+                self._flush_scheduled_board_refreshes()
+            )
+
+    async def _flush_scheduled_board_refreshes(self):
+        try:
+            while self._board_refresh_requested:
+                self._board_refresh_requested = False
+                await asyncio.sleep(BOARD_REFRESH_DEBOUNCE_SECONDS)
+                if self._board_refresh_requested:
+                    continue
+                try:
+                    await self.refresh_board()
+                except Exception:
+                    logger.exception("Could not refresh the ranking board")
+        finally:
+            self._board_refresh_task = None
+            if self._board_refresh_requested and not self.is_closed():
+                self.schedule_board_refresh()
 
 
 def create_bot():
@@ -147,6 +194,7 @@ def create_bot():
         except ValueError as error:
             await interaction.followup.send(str(error), ephemeral=True)
             return
+        bot.schedule_board_refresh()
         await interaction.followup.send(
             f"`{nickname.strip()}` 등록을 완료했습니다. 이제 랭킹 채널에서 추뎀을 입력할 수 있습니다.",
             ephemeral=True,
@@ -161,13 +209,18 @@ def create_bot():
     ):
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
+            database_started = perf_counter()
             nickname = await asyncio.to_thread(
                 bot.store.set_level, interaction.user.id, level
             )
-            await bot.refresh_board()
+            logger.info(
+                "Slash level update timing: database=%.3fs",
+                perf_counter() - database_started,
+            )
         except ValueError as error:
             await interaction.followup.send(str(error), ephemeral=True)
             return
+        bot.schedule_board_refresh()
         await interaction.followup.send(
             f"`{nickname}` 레벨을 {level:,}(으)로 변경했습니다.", ephemeral=True
         )
@@ -200,10 +253,10 @@ def create_bot():
                 level,
                 damage_jo,
             )
-            await bot.refresh_board()
         except ValueError as error:
             await interaction.followup.send(str(error), ephemeral=True)
             return
+        bot.schedule_board_refresh()
         await interaction.followup.send(
             f"`{target.strip()}` 대상을 `{nickname.strip()}`으로 등록했습니다.",
             ephemeral=True,
@@ -237,10 +290,10 @@ def create_bot():
                 level,
                 damage_jo,
             )
-            await bot.refresh_board()
         except ValueError as error:
             await interaction.followup.send(str(error), ephemeral=True)
             return
+        bot.schedule_board_refresh()
         await interaction.followup.send(
             f"`{target.strip()}` 대상의 `{new_nickname}` 정보를 수정했습니다.",
             ephemeral=True,
@@ -255,10 +308,10 @@ def create_bot():
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             nickname = await asyncio.to_thread(bot.store.delete_member, target)
-            await bot.refresh_board()
         except ValueError as error:
             await interaction.followup.send(str(error), ephemeral=True)
             return
+        bot.schedule_board_refresh()
         await interaction.followup.send(
             f"`{target.strip()}` 대상의 `{nickname}` 정보를 삭제했습니다.",
             ephemeral=True,
@@ -293,10 +346,15 @@ def create_bot():
         level = parse_level_message(message.content)
         if level is not None:
             try:
+                database_started = perf_counter()
                 await asyncio.to_thread(
                     bot.store.set_level, message.author.id, level
                 )
-                await bot.refresh_board()
+                logger.info(
+                    "Level message update timing: database=%.3fs",
+                    perf_counter() - database_started,
+                )
+                bot.schedule_board_refresh()
                 await message.delete()
             except ValueError:
                 await message.add_reaction("🔒")
@@ -323,8 +381,13 @@ def create_bot():
         if damage is None:
             return
         try:
+            database_started = perf_counter()
             nickname = await asyncio.to_thread(
                 bot.store.set_damage, message.author.id, damage
+            )
+            logger.info(
+                "Damage message update timing: database=%.3fs",
+                perf_counter() - database_started,
             )
             if nickname is None:
                 await message.add_reaction("🔒")
@@ -335,7 +398,7 @@ def create_bot():
                 except discord.Forbidden:
                     pass
                 return
-            await bot.refresh_board()
+            bot.schedule_board_refresh()
             await message.add_reaction("✅")
         except Exception:
             logger.exception("Could not update damage from a ranking message")

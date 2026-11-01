@@ -14,13 +14,15 @@ from board import (
 
 
 class RankingBoardTests(unittest.TestCase):
-    def test_numeric_only_damage_input(self):
-        self.assertEqual(parse_damage_message("2600"), 2600)
-        self.assertEqual(parse_damage_message(" 2600 "), 2600)
-        self.assertIsNone(parse_damage_message("추뎀 2600"))
-        self.assertIsNone(parse_damage_message("2,600"))
-        self.assertIsNone(parse_damage_message("-1"))
-        self.assertIsNone(parse_damage_message("1000000000000000"))
+    def test_damage_input_requires_keyword_and_value(self):
+        self.assertEqual(parse_damage_message("추뎀 2600"), 2600)
+        self.assertEqual(parse_damage_message(" 추뎀   2600 "), 2600)
+        self.assertIsNone(parse_damage_message("2600"))
+        self.assertIsNone(parse_damage_message("추뎀"))
+        self.assertIsNone(parse_damage_message("추딜 2600"))
+        self.assertIsNone(parse_damage_message("추뎀 2,600"))
+        self.assertIsNone(parse_damage_message("추뎀 -1"))
+        self.assertIsNone(parse_damage_message("추뎀 1000000000000000"))
 
     def test_damage_is_displayed_with_comma_and_unit(self):
         self.assertEqual(format_damage(2600), "2,600조")

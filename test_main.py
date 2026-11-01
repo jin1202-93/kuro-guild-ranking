@@ -1,7 +1,9 @@
 import json
 import unittest
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
+from bot import RankingBot
 from main import discord_health, health
 
 
@@ -65,6 +67,20 @@ class HealthEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             json.loads(response.text), {"status": "channel_unavailable"}
         )
+
+
+class BoardRefreshSchedulingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_close_refresh_requests_are_coalesced(self):
+        bot = RankingBot("test-token", 1, 2, store=Mock())
+        bot.refresh_board = AsyncMock()
+        bot.schedule_board_refresh()
+        bot.schedule_board_refresh()
+        bot.schedule_board_refresh()
+
+        await bot._board_refresh_task
+
+        bot.refresh_board.assert_awaited_once()
+        await bot.close()
 
 
 if __name__ == "__main__":
