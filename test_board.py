@@ -46,7 +46,7 @@ class RankingBoardTests(unittest.TestCase):
                 image_data = render_board(members, now=fixed_time)
                 with Image.open(image_data) as image:
                     self.assertEqual(image.format, "PNG")
-                    self.assertEqual(image.size, (900, 1866))
+                    self.assertEqual(image.size, (1024, 1536))
 
 
 if __name__ == "__main__":

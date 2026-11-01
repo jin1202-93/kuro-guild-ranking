@@ -14,16 +14,24 @@ logger = logging.getLogger(__name__)
 MAX_LEVEL = 9999
 
 
-def _is_admin(interaction):
+def _is_admin(interaction, admin_role_id=None):
     permissions = getattr(interaction.user, "guild_permissions", None)
-    return bool(
+    has_server_permission = bool(
         permissions
         and (permissions.administrator or permissions.manage_guild)
+    )
+    if has_server_permission:
+        return True
+    if not admin_role_id:
+        return False
+    return any(
+        str(role.id) == str(admin_role_id)
+        for role in getattr(interaction.user, "roles", ())
     )
 
 
 class RankingBot(commands.Bot):
-    def __init__(self, token, guild_id, channel_id, store=None):
+    def __init__(self, token, guild_id, channel_id, store=None, admin_role_id=None):
         intents = discord.Intents.none()
         intents.guilds = True
         intents.messages = True
@@ -32,6 +40,7 @@ class RankingBot(commands.Bot):
         self.token = token
         self.guild_id = guild_id
         self.channel_id = channel_id
+        self.admin_role_id = admin_role_id
         self.store = store or RankingStore()
         self.board_lock = asyncio.Lock()
 
@@ -74,13 +83,21 @@ def create_bot():
     token = os.environ.get("RANKING_DISCORD_BOT_TOKEN", "").strip()
     guild_id = os.environ.get("RANKING_GUILD_ID", "").strip()
     channel_id = os.environ.get("RANKING_CHANNEL_ID", "").strip()
+    admin_role_id = os.environ.get("RANKING_ADMIN_ROLE_ID", "").strip()
     if not all((token, guild_id, channel_id)):
         raise RuntimeError(
             "RANKING_DISCORD_BOT_TOKEN, RANKING_GUILD_ID, "
             "RANKING_CHANNEL_ID를 설정하세요."
         )
 
-    bot = RankingBot(token, int(guild_id), int(channel_id))
+    if admin_role_id and not admin_role_id.isdecimal():
+        raise RuntimeError("RANKING_ADMIN_ROLE_ID는 Discord 역할 ID여야 합니다.")
+    bot = RankingBot(
+        token,
+        int(guild_id),
+        int(channel_id),
+        admin_role_id=admin_role_id or None,
+    )
     guild = discord.Object(id=bot.guild_id)
 
     async def admin_only(interaction):
@@ -89,9 +106,10 @@ def create_bot():
                 "등록된 서버에서만 사용할 수 있습니다.", ephemeral=True
             )
             return False
-        if not _is_admin(interaction):
+        if not _is_admin(interaction, bot.admin_role_id):
             await interaction.response.send_message(
-                "서버 관리자만 사용할 수 있습니다.", ephemeral=True
+                "서버 관리자 또는 랭킹 관리자 역할이 있어야 사용할 수 있습니다.",
+                ephemeral=True,
             )
             return False
         return True
@@ -111,7 +129,7 @@ def create_bot():
         except discord.HTTPException:
             logger.exception("Could not send a command error")
 
-    @bot.tree.command(name="인증", description="게임 닉네임 등록을 요청합니다.", guild=guild)
+    @bot.tree.command(name="인증", description="게임 닉네임을 등록합니다.", guild=guild)
     @app_commands.describe(nickname="등록할 게임 닉네임")
     @app_commands.rename(nickname="닉네임")
     async def register(interaction: discord.Interaction, nickname: str):
@@ -123,7 +141,7 @@ def create_bot():
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             await asyncio.to_thread(
-                bot.store.request_registration,
+                bot.store.register_account,
                 interaction.user.id,
                 nickname,
             )
@@ -131,7 +149,7 @@ def create_bot():
             await interaction.followup.send(str(error), ephemeral=True)
             return
         await interaction.followup.send(
-            f"`{nickname.strip()}` 등록 요청을 보냈습니다. 관리자 승인 후 이용할 수 있습니다.",
+            f"`{nickname.strip()}` 등록을 완료했습니다. 이제 랭킹 채널에서 추딜을 입력할 수 있습니다.",
             ephemeral=True,
         )
 
@@ -155,81 +173,19 @@ def create_bot():
             f"`{nickname}` 레벨을 {level:,}(으)로 변경했습니다.", ephemeral=True
         )
 
-    @bot.tree.command(name="대기목록", description="승인 대기 중인 닉네임을 확인합니다.", guild=guild)
-    async def pending_list(interaction: discord.Interaction):
-        if not await admin_only(interaction):
-            return
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        try:
-            pending = await asyncio.to_thread(bot.store.list_pending)
-        except Exception:
-            logger.exception("Could not load pending registrations")
-            await interaction.followup.send(
-                "대기 목록을 불러오지 못했습니다. 봇 로그를 확인하세요.",
-                ephemeral=True,
-            )
-            return
-        if not pending:
-            await interaction.followup.send("승인 대기 요청이 없습니다.", ephemeral=True)
-            return
-        lines = [
-            f"<@{item['discord_user_id']}> · `{item['nickname']}`"
-            for item in pending[:25]
-        ]
-        await interaction.followup.send("\n".join(lines), ephemeral=True)
-
-    @bot.tree.command(name="승인", description="닉네임 등록 요청을 승인합니다.", guild=guild)
-    @app_commands.describe(nickname="/대기목록에 표시된 게임 닉네임")
-    @app_commands.rename(nickname="닉네임")
-    async def approve(interaction: discord.Interaction, nickname: str):
-        if not await admin_only(interaction):
-            return
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        try:
-            approved = await asyncio.to_thread(
-                bot.store.approve_registration, nickname
-            )
-            await bot.refresh_board()
-        except ValueError as error:
-            await interaction.followup.send(str(error), ephemeral=True)
-            return
-        await interaction.followup.send(
-            f"<@{approved['discord_user_id']}>님의 `{approved['nickname']}` 등록을 승인했습니다.",
-            ephemeral=True,
-        )
-
-    @bot.tree.command(name="거절", description="닉네임 등록 요청을 거절합니다.", guild=guild)
-    @app_commands.describe(member="거절할 사용자")
-    @app_commands.rename(member="사용자")
-    async def reject(interaction: discord.Interaction, member: discord.Member):
-        if not await admin_only(interaction):
-            return
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        try:
-            nickname = await asyncio.to_thread(
-                bot.store.reject_registration, member.id
-            )
-        except ValueError as error:
-            await interaction.followup.send(str(error), ephemeral=True)
-            return
-        await interaction.followup.send(
-            f"{member.mention}님의 `{nickname}` 등록 요청을 거절했습니다.",
-            ephemeral=True,
-        )
-
     @bot.tree.command(name="회원등록", description="관리자가 회원을 직접 등록합니다.", guild=guild)
     @app_commands.describe(
-        member="등록할 사용자",
+        target="디스코드 ID 또는 등록된 게임 닉네임",
         nickname="게임 닉네임",
         level="레벨",
         damage_jo="추딜(조 단위 숫자)",
     )
     @app_commands.rename(
-        member="사용자", nickname="닉네임", level="레벨", damage_jo="추딜"
+        target="대상", nickname="닉네임", level="레벨", damage_jo="추딜"
     )
     async def admin_register(
         interaction: discord.Interaction,
-        member: discord.Member,
+        target: str,
         nickname: str,
         level: app_commands.Range[int, 0, MAX_LEVEL],
         damage_jo: app_commands.Range[int, 0, MAX_DAMAGE],
@@ -240,7 +196,7 @@ def create_bot():
         try:
             await asyncio.to_thread(
                 bot.store.register_member,
-                member.id,
+                target,
                 nickname,
                 level,
                 damage_jo,
@@ -250,23 +206,23 @@ def create_bot():
             await interaction.followup.send(str(error), ephemeral=True)
             return
         await interaction.followup.send(
-            f"{member.mention}님을 `{nickname.strip()}`으로 등록했습니다.",
+            f"`{target.strip()}` 대상을 `{nickname.strip()}`으로 등록했습니다.",
             ephemeral=True,
         )
 
     @bot.tree.command(name="회원수정", description="관리자가 회원 정보를 수정합니다.", guild=guild)
     @app_commands.describe(
-        member="수정할 사용자",
+        target="디스코드 ID 또는 등록된 게임 닉네임",
         nickname="새 게임 닉네임",
         level="새 레벨",
         damage_jo="새 추딜(조 단위 숫자)",
     )
     @app_commands.rename(
-        member="사용자", nickname="닉네임", level="레벨", damage_jo="추딜"
+        target="대상", nickname="닉네임", level="레벨", damage_jo="추딜"
     )
     async def admin_update(
         interaction: discord.Interaction,
-        member: discord.Member,
+        target: str,
         nickname: str | None = None,
         level: app_commands.Range[int, 0, MAX_LEVEL] | None = None,
         damage_jo: app_commands.Range[int, 0, MAX_DAMAGE] | None = None,
@@ -277,7 +233,7 @@ def create_bot():
         try:
             new_nickname = await asyncio.to_thread(
                 bot.store.update_member,
-                member.id,
+                target,
                 nickname,
                 level,
                 damage_jo,
@@ -287,25 +243,25 @@ def create_bot():
             await interaction.followup.send(str(error), ephemeral=True)
             return
         await interaction.followup.send(
-            f"{member.mention}님의 `{new_nickname}` 정보를 수정했습니다.",
+            f"`{target.strip()}` 대상의 `{new_nickname}` 정보를 수정했습니다.",
             ephemeral=True,
         )
 
     @bot.tree.command(name="회원삭제", description="관리자가 회원 정보를 삭제합니다.", guild=guild)
-    @app_commands.describe(member="삭제할 사용자")
-    @app_commands.rename(member="사용자")
-    async def admin_delete(interaction: discord.Interaction, member: discord.Member):
+    @app_commands.describe(target="디스코드 ID 또는 등록된 게임 닉네임")
+    @app_commands.rename(target="대상")
+    async def admin_delete(interaction: discord.Interaction, target: str):
         if not await admin_only(interaction):
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
-            nickname = await asyncio.to_thread(bot.store.delete_member, member.id)
+            nickname = await asyncio.to_thread(bot.store.delete_member, target)
             await bot.refresh_board()
         except ValueError as error:
             await interaction.followup.send(str(error), ephemeral=True)
             return
         await interaction.followup.send(
-            f"{member.mention}님의 `{nickname}` 정보를 삭제했습니다.",
+            f"`{target.strip()}` 대상의 `{nickname}` 정보를 삭제했습니다.",
             ephemeral=True,
         )
 
@@ -321,6 +277,7 @@ def create_bot():
     async def on_ready():
         logger.info("Ranking bot connected as %s", bot.user)
         try:
+            await asyncio.to_thread(bot.store.activate_pending_members)
             await bot.refresh_board()
         except Exception:
             logger.exception("Could not initialize the ranking image")
@@ -345,7 +302,7 @@ def create_bot():
                 await message.add_reaction("🔒")
                 try:
                     await message.author.send(
-                        "승인된 랭킹 계정이 없습니다. 먼저 `/인증`으로 등록 요청을 해주세요."
+                        "등록된 랭킹 계정이 없습니다. 먼저 `/인증`으로 등록해주세요."
                     )
                 except discord.Forbidden:
                     pass

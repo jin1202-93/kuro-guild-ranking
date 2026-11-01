@@ -9,16 +9,17 @@ from PIL import Image, ImageDraw, ImageFont
 
 MAX_DAMAGE = 999_999_999_999_999
 _DAMAGE_MESSAGE = re.compile(r"[0-9]{1,15}\Z")
-TEMPLATE_PATH = Path(__file__).with_name("damage-board.png")
-ROW_TOP = 208
-ROW_HEIGHT = 54
 ROW_COUNT = 30
-ROW_TEXT_BOXES = (
-    (60, 131),
-    (165, 433),
-    (459, 590),
-    (615, 849),
+TEMPLATE_PATH = Path(__file__).with_name("샘플.png")
+ROW_CENTERS = (
+    322, 372, 422, 470, 514, 558, 602,
+    644, 683, 722, 761, 800, 839, 877,
+    915, 953, 991, 1029, 1065, 1101, 1138, 1174, 1209, 1243, 1277, 1310,
+    1345, 1382, 1419, 1456,
 )
+TEXT_BOXES = ((282, 478), (576, 700), (810, 946))
+TEXT_CENTERS = (380, 638, 878)
+TEXT_WIDTHS = (178, 112, 124)
 FONT_CANDIDATES = (
     os.environ.get("RANKING_FONT_PATH", ""),
     str(Path(__file__).with_name("NotoSansKR-Variable.ttf")),
@@ -51,15 +52,51 @@ def sort_members(members):
     )
 
 
-def _load_font(size):
+def _load_font(size, weight=600):
     for path in FONT_CANDIDATES:
         if path and os.path.isfile(path):
             font = ImageFont.truetype(path, size)
             if Path(path).name == "NotoSansKR-Variable.ttf":
-                font.set_variation_by_axes([700])
+                font.set_variation_by_axes([weight])
             return font
     raise RuntimeError(
-                "한글 폰트를 찾을 수 없습니다. NotoSansKR-Variable.ttf 파일을 확인하세요."
+        "한글 폰트를 찾을 수 없습니다. NotoSansKR-Variable.ttf 파일을 확인하세요."
+    )
+
+
+def _rank_style(rank):
+    if rank <= 7:
+        return (255, 225, 160)
+    if rank <= 14:
+        return (247, 248, 255)
+    if rank <= 26:
+        return (240, 250, 243)
+    return (43, 45, 93)
+
+
+def _draw_fitted_text(
+    draw,
+    value,
+    center,
+    color,
+    max_width,
+    font_size=19,
+    weight=600,
+):
+    font = _load_font(font_size, weight)
+    while font_size > 11 and draw.textbbox((0, 0), value, font=font)[2] > max_width:
+        font_size -= 1
+        font = _load_font(font_size, weight)
+    draw.text(center, value, font=font, fill=color, anchor="mm")
+
+
+def _draw_centered(draw, value, center, color, font_size, weight=600):
+    draw.text(
+        center,
+        value,
+        font=_load_font(font_size, weight),
+        fill=color,
+        anchor="mm",
     )
 
 
@@ -77,68 +114,47 @@ def _restore_text_strip(image, left, top, right, bottom):
             )
 
 
-def _row_text_color(rank, column):
-    if rank <= 7:
-        return (255, 235, 185)
-    if rank <= 14:
-        return (213, 240, 251)
-    if rank <= 26:
-        return (220, 247, 231)
-    return (132, 91, 174) if column == 3 else (40, 42, 51)
-
-
-def _draw_fitted_text(draw, value, center, color, max_width, font_size=19):
-    font = _load_font(font_size)
-    while font_size > 11 and draw.textbbox((0, 0), value, font=font)[2] > max_width:
-        font_size -= 1
-        font = _load_font(font_size)
-    draw.text(center, value, font=font, fill=color, anchor="mm")
-
-
 def render_board(members, now=None):
     if not TEMPLATE_PATH.is_file():
-        raise FileNotFoundError(f"랭킹 배경 이미지를 찾을 수 없습니다: {TEMPLATE_PATH}")
+        raise FileNotFoundError(f"랭킹 샘플 이미지를 찾을 수 없습니다: {TEMPLATE_PATH}")
     ranked = sort_members(members)[:ROW_COUNT]
+    timestamp = now or datetime.now(timezone(timedelta(hours=9)))
     with Image.open(TEMPLATE_PATH) as template:
         image = template.convert("RGB")
-
-    timestamp = now or datetime.now(timezone(timedelta(hours=9)))
     draw = ImageDraw.Draw(image)
 
-    _restore_text_strip(image, 780, 111, 858, 134)
-    _draw_fitted_text(
-        draw,
+    _restore_text_strip(image, 875, 199, 978, 231)
+    draw.text(
+        (926, 216),
         timestamp.strftime("%y.%m.%d"),
-        (819, 123),
-        (179, 171, 191),
-        max_width=75,
-        font_size=11,
+        font=_load_font(12, 650),
+        fill=(245, 239, 255),
+        anchor="mm",
     )
 
     for index in range(ROW_COUNT):
-        row_center = ROW_TOP + index * ROW_HEIGHT + ROW_HEIGHT // 2
-        for left, right in ROW_TEXT_BOXES:
+        row_center = ROW_CENTERS[index]
+        for left, right in TEXT_BOXES:
             _restore_text_strip(image, left, row_center - 15, right, row_center + 15)
-
         if index >= len(ranked):
             continue
 
         member = ranked[index]
         values = (
-            str(index + 1),
             str(member["nickname"]),
             f"{int(member.get('level') or 0):,}",
             format_damage(int(member.get("damage_jo") or 0)),
         )
-        centers = (95, 299, 524, 733)
-        widths = (67, 250, 115, 218)
+        text_color = _rank_style(index + 1)
         for column, value in enumerate(values):
             _draw_fitted_text(
                 draw,
                 value,
-                (centers[column], row_center),
-                _row_text_color(index + 1, column),
-                widths[column],
+                (TEXT_CENTERS[column], row_center),
+                text_color,
+                TEXT_WIDTHS[column],
+                font_size=22,
+                weight=700,
             )
 
     output = BytesIO()

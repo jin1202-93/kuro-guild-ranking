@@ -1,10 +1,13 @@
 import os
+import re
 
 from supabase import create_client
 
 
 MEMBERS_TABLE = "guild_ranking_members_v1"
 SETTINGS_TABLE = "guild_ranking_settings_v1"
+DISCORD_ID_PATTERN = re.compile(r"[0-9]{17,20}\Z")
+DISCORD_MENTION_PATTERN = re.compile(r"<@!?(?P<user_id>[0-9]{17,20})>\Z")
 
 
 class RankingStore:
@@ -37,6 +40,44 @@ class RankingStore:
         )
         return rows[0] if rows else None
 
+    @staticmethod
+    def _resolve_from_records(identifier, records, allow_unregistered_discord_id=False):
+        value = str(identifier).strip()
+        mention = DISCORD_MENTION_PATTERN.fullmatch(value)
+        discord_user_id = mention.group("user_id") if mention else value
+        if DISCORD_ID_PATTERN.fullmatch(discord_user_id):
+            matches = [
+                record
+                for record in records
+                if str(record["discord_user_id"]) == discord_user_id
+            ]
+            if matches:
+                return matches[0]["discord_user_id"]
+            if allow_unregistered_discord_id:
+                return discord_user_id
+            raise ValueError("해당 디스코드 ID의 등록 정보를 찾을 수 없습니다.")
+
+        nickname = value.casefold()
+        matches = [
+            record
+            for record in records
+            if record["nickname"].casefold() == nickname
+        ]
+        if len(matches) > 1:
+            raise ValueError("같은 닉네임이 여러 개입니다. 디스코드 ID를 입력하세요.")
+        if not matches:
+            raise ValueError("해당 디스코드 ID 또는 게임 닉네임을 찾을 수 없습니다.")
+        return matches[0]["discord_user_id"]
+
+    def _all_member_records(self):
+        return (
+            self.client.table(MEMBERS_TABLE)
+            .select("discord_user_id,nickname,status")
+            .execute()
+            .data
+            or []
+        )
+
     def _ensure_nickname_available(self, nickname, discord_user_id):
         members = (
             self.client.table(MEMBERS_TABLE)
@@ -53,77 +94,26 @@ class RankingStore:
         ):
             raise ValueError("이미 다른 디스코드 계정에 등록된 닉네임입니다.")
 
-    def request_registration(self, discord_user_id, nickname):
+    def register_account(self, discord_user_id, nickname):
         discord_user_id = str(discord_user_id)
         nickname = self._nickname(nickname)
         current = self._member(discord_user_id)
-        if current and current["status"] == "approved":
-            raise ValueError("이미 등록된 계정입니다. 변경은 관리자에게 요청하세요.")
         self._ensure_nickname_available(nickname, discord_user_id)
         self.client.table(MEMBERS_TABLE).upsert(
             {
                 "discord_user_id": discord_user_id,
                 "nickname": nickname,
-                "status": "pending",
-                "level": 0,
-                "damage_jo": 0,
+                "status": "approved",
+                "level": int(current.get("level") or 0) if current else 0,
+                "damage_jo": int(current.get("damage_jo") or 0) if current else 0,
             },
             on_conflict="discord_user_id",
         ).execute()
 
-    def approve_registration(self, nickname):
-        nickname = self._nickname(nickname)
-        pending = self.list_pending()
-        matches = [
-            item
-            for item in pending
-            if item["nickname"].casefold() == nickname.casefold()
-        ]
-        if not matches:
-            raise ValueError("해당 닉네임의 승인 대기 요청을 찾을 수 없습니다.")
-        if len(matches) > 1:
-            raise ValueError("같은 닉네임의 대기 요청이 여러 개입니다. 목록을 확인하세요.")
-
-        requested = matches[0]
-        rows = (
-            self.client.table(MEMBERS_TABLE)
-            .update({"status": "approved"})
-            .eq("discord_user_id", requested["discord_user_id"])
-            .eq("status", "pending")
-            .select("discord_user_id,nickname")
-            .execute()
-            .data
-            or []
-        )
-        if not rows:
-            raise ValueError("승인 대기 중인 등록 요청을 찾을 수 없습니다.")
-        return rows[0]
-
-    def reject_registration(self, discord_user_id):
-        rows = (
-            self.client.table(MEMBERS_TABLE)
-            .delete()
-            .eq("discord_user_id", str(discord_user_id))
-            .eq("status", "pending")
-            .select("nickname")
-            .execute()
-            .data
-            or []
-        )
-        if not rows:
-            raise ValueError("거절할 대기 중인 등록 요청을 찾을 수 없습니다.")
-        return rows[0]["nickname"]
-
-    def list_pending(self):
-        return (
-            self.client.table(MEMBERS_TABLE)
-            .select("discord_user_id,nickname")
-            .eq("status", "pending")
-            .order("requested_at")
-            .execute()
-            .data
-            or []
-        )
+    def activate_pending_members(self):
+        self.client.table(MEMBERS_TABLE).update(
+            {"status": "approved"}
+        ).eq("status", "pending").execute()
 
     def list_members(self):
         return (
@@ -162,10 +152,15 @@ class RankingStore:
             or []
         )
         if not rows:
-            raise ValueError("승인된 계정이 없습니다. 먼저 /인증을 완료하세요.")
+            raise ValueError("등록된 계정이 없습니다. 먼저 /인증을 사용하세요.")
         return rows[0]["nickname"]
 
     def register_member(self, discord_user_id, nickname, level, damage_jo):
+        discord_user_id = self._resolve_from_records(
+            discord_user_id,
+            self._all_member_records(),
+            allow_unregistered_discord_id=True,
+        )
         discord_user_id = str(discord_user_id)
         nickname = self._nickname(nickname)
         self._ensure_nickname_available(nickname, discord_user_id)
@@ -181,6 +176,10 @@ class RankingStore:
         ).execute()
 
     def update_member(self, discord_user_id, nickname=None, level=None, damage_jo=None):
+        discord_user_id = self._resolve_from_records(
+            discord_user_id,
+            self.list_members(),
+        )
         changes = {}
         if nickname is not None:
             nickname = self._nickname(nickname)
@@ -207,6 +206,10 @@ class RankingStore:
         return rows[0]["nickname"]
 
     def delete_member(self, discord_user_id):
+        discord_user_id = self._resolve_from_records(
+            discord_user_id,
+            self._all_member_records(),
+        )
         rows = (
             self.client.table(MEMBERS_TABLE)
             .delete()
