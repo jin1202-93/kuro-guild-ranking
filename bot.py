@@ -399,7 +399,14 @@ def create_bot():
                     pass
                 return
             bot.schedule_board_refresh()
-            await message.add_reaction("✅")
+            try:
+                await message.delete()
+            except discord.Forbidden:
+                logger.exception("Could not delete a damage update message")
+                try:
+                    await message.add_reaction("✅")
+                except discord.HTTPException:
+                    pass
         except Exception:
             logger.exception("Could not update damage from a ranking message")
             try:
