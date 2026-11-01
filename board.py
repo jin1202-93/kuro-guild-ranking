@@ -8,7 +8,9 @@ from PIL import Image, ImageDraw, ImageFont
 
 
 MAX_DAMAGE = 999_999_999_999_999
+MAX_LEVEL = 9999
 _DAMAGE_MESSAGE = re.compile(r"[0-9]{1,15}\Z")
+_LEVEL_MESSAGE = re.compile(r"레벨\s+([0-9]{1,4})\Z")
 ROW_COUNT = 30
 TEMPLATE_PATH = Path(__file__).with_name("샘플.png")
 ROW_CENTERS = (
@@ -38,6 +40,14 @@ def parse_damage_message(content):
         return None
     damage = int(value)
     return damage if damage <= MAX_DAMAGE else None
+
+
+def parse_level_message(content):
+    match = _LEVEL_MESSAGE.fullmatch(content.strip())
+    if not match:
+        return None
+    level = int(match.group(1))
+    return level if level <= MAX_LEVEL else None
 
 
 def format_damage(damage):

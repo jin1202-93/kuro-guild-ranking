@@ -7,6 +7,7 @@ from PIL import Image, ImageFont
 from board import (
     format_damage,
     parse_damage_message,
+    parse_level_message,
     render_board,
     sort_members,
 )
@@ -23,6 +24,14 @@ class RankingBoardTests(unittest.TestCase):
 
     def test_damage_is_displayed_with_comma_and_unit(self):
         self.assertEqual(format_damage(2600), "2,600조")
+
+    def test_level_message_requires_exact_keyword_and_valid_level(self):
+        self.assertEqual(parse_level_message("레벨 200"), 200)
+        self.assertEqual(parse_level_message(" 레벨   9999 "), 9999)
+        self.assertEqual(parse_level_message("레벨 10000"), None)
+        self.assertEqual(parse_level_message("레벨 -1"), None)
+        self.assertEqual(parse_level_message("레벨200"), None)
+        self.assertEqual(parse_level_message("레벨 200 추딜"), None)
 
     def test_members_are_sorted_by_damage_descending(self):
         members = [

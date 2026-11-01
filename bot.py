@@ -6,12 +6,11 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from board import MAX_DAMAGE, parse_damage_message, render_board
+from board import MAX_DAMAGE, MAX_LEVEL, parse_damage_message, parse_level_message, render_board
 from store import RankingStore
 
 
 logger = logging.getLogger(__name__)
-MAX_LEVEL = 9999
 
 
 def _is_admin(interaction, admin_role_id=None):
@@ -290,6 +289,35 @@ def create_bot():
             or message.guild.id != bot.guild_id
             or message.channel.id != bot.channel_id
         ):
+            return
+        level = parse_level_message(message.content)
+        if level is not None:
+            try:
+                await asyncio.to_thread(
+                    bot.store.set_level, message.author.id, level
+                )
+                await bot.refresh_board()
+                await message.delete()
+            except ValueError:
+                await message.add_reaction("🔒")
+                try:
+                    await message.author.send(
+                        "등록된 랭킹 계정이 없습니다. 먼저 `/인증`으로 등록해주세요."
+                    )
+                except discord.Forbidden:
+                    pass
+            except discord.Forbidden:
+                logger.exception("Could not delete a level update message")
+                try:
+                    await message.add_reaction("✅")
+                except discord.HTTPException:
+                    pass
+            except Exception:
+                logger.exception("Could not update level from a ranking message")
+                try:
+                    await message.add_reaction("⚠️")
+                except discord.HTTPException:
+                    pass
             return
         damage = parse_damage_message(message.content)
         if damage is None:
