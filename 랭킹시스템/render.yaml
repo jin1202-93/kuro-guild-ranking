@@ -3,7 +3,7 @@ services:
     name: kuro-guild-ranking
     runtime: python
     plan: free
-    rootDir: .
+    rootDir: 순위시스템
     buildCommand: apt-get update && apt-get install -y fonts-noto-cjk && pip install -r requirements.txt
     startCommand: python main.py
     healthCheckPath: /healthz
