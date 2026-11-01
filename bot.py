@@ -148,7 +148,7 @@ def create_bot():
             await interaction.followup.send(str(error), ephemeral=True)
             return
         await interaction.followup.send(
-            f"`{nickname.strip()}` 등록을 완료했습니다. 이제 랭킹 채널에서 추딜을 입력할 수 있습니다.",
+            f"`{nickname.strip()}` 등록을 완료했습니다. 이제 랭킹 채널에서 추뎀을 입력할 수 있습니다.",
             ephemeral=True,
         )
 
@@ -177,10 +177,10 @@ def create_bot():
         target="디스코드 ID 또는 등록된 게임 닉네임",
         nickname="게임 닉네임",
         level="레벨",
-        damage_jo="추딜(조 단위 숫자)",
+        damage_jo="추뎀(조 단위 숫자)",
     )
     @app_commands.rename(
-        target="대상", nickname="닉네임", level="레벨", damage_jo="추딜"
+        target="대상", nickname="닉네임", level="레벨", damage_jo="추뎀"
     )
     async def admin_register(
         interaction: discord.Interaction,
@@ -214,10 +214,10 @@ def create_bot():
         target="디스코드 ID 또는 등록된 게임 닉네임",
         nickname="새 게임 닉네임",
         level="새 레벨",
-        damage_jo="새 추딜(조 단위 숫자)",
+        damage_jo="새 추뎀(조 단위 숫자)",
     )
     @app_commands.rename(
-        target="대상", nickname="닉네임", level="레벨", damage_jo="추딜"
+        target="대상", nickname="닉네임", level="레벨", damage_jo="추뎀"
     )
     async def admin_update(
         interaction: discord.Interaction,

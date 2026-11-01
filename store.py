@@ -190,7 +190,7 @@ class RankingStore:
         if damage_jo is not None:
             changes["damage_jo"] = damage_jo
         if not changes:
-            raise ValueError("변경할 닉네임, 레벨 또는 추딜을 하나 이상 입력하세요.")
+            raise ValueError("변경할 닉네임, 레벨 또는 추뎀을 하나 이상 입력하세요.")
         rows = (
             self.client.table(MEMBERS_TABLE)
             .update(changes)
