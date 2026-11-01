@@ -71,20 +71,33 @@ class RankingStore:
             on_conflict="discord_user_id",
         ).execute()
 
-    def approve_registration(self, discord_user_id):
+    def approve_registration(self, nickname):
+        nickname = self._nickname(nickname)
+        pending = self.list_pending()
+        matches = [
+            item
+            for item in pending
+            if item["nickname"].casefold() == nickname.casefold()
+        ]
+        if not matches:
+            raise ValueError("해당 닉네임의 승인 대기 요청을 찾을 수 없습니다.")
+        if len(matches) > 1:
+            raise ValueError("같은 닉네임의 대기 요청이 여러 개입니다. 목록을 확인하세요.")
+
+        requested = matches[0]
         rows = (
             self.client.table(MEMBERS_TABLE)
             .update({"status": "approved"})
-            .eq("discord_user_id", str(discord_user_id))
+            .eq("discord_user_id", requested["discord_user_id"])
             .eq("status", "pending")
-            .select("nickname")
+            .select("discord_user_id,nickname")
             .execute()
             .data
             or []
         )
         if not rows:
             raise ValueError("승인 대기 중인 등록 요청을 찾을 수 없습니다.")
-        return rows[0]["nickname"]
+        return rows[0]
 
     def reject_registration(self, discord_user_id):
         rows = (

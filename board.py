@@ -21,6 +21,7 @@ ROW_TEXT_BOXES = (
 )
 FONT_CANDIDATES = (
     os.environ.get("RANKING_FONT_PATH", ""),
+    str(Path(__file__).with_name("NotoSansKR-Variable.ttf")),
     r"C:\Windows\Fonts\malgunbd.ttf",
     r"C:\Windows\Fonts\malgun.ttf",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
@@ -53,10 +54,12 @@ def sort_members(members):
 def _load_font(size):
     for path in FONT_CANDIDATES:
         if path and os.path.isfile(path):
-            return ImageFont.truetype(path, size)
+            font = ImageFont.truetype(path, size)
+            if Path(path).name == "NotoSansKR-Variable.ttf":
+                font.set_variation_by_axes([700])
+            return font
     raise RuntimeError(
-        "한글 폰트를 찾을 수 없습니다. RANKING_FONT_PATH를 설정하거나 "
-        "Noto Sans CJK 폰트를 설치하세요."
+                "한글 폰트를 찾을 수 없습니다. NotoSansKR-Variable.ttf 파일을 확인하세요."
     )
 
 

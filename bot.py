@@ -179,22 +179,22 @@ def create_bot():
         await interaction.followup.send("\n".join(lines), ephemeral=True)
 
     @bot.tree.command(name="승인", description="닉네임 등록 요청을 승인합니다.", guild=guild)
-    @app_commands.describe(member="승인할 사용자")
-    @app_commands.rename(member="사용자")
-    async def approve(interaction: discord.Interaction, member: discord.Member):
+    @app_commands.describe(nickname="/대기목록에 표시된 게임 닉네임")
+    @app_commands.rename(nickname="닉네임")
+    async def approve(interaction: discord.Interaction, nickname: str):
         if not await admin_only(interaction):
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
-            nickname = await asyncio.to_thread(
-                bot.store.approve_registration, member.id
+            approved = await asyncio.to_thread(
+                bot.store.approve_registration, nickname
             )
             await bot.refresh_board()
         except ValueError as error:
             await interaction.followup.send(str(error), ephemeral=True)
             return
         await interaction.followup.send(
-            f"{member.mention}님의 `{nickname}` 등록을 승인했습니다.",
+            f"<@{approved['discord_user_id']}>님의 `{approved['nickname']}` 등록을 승인했습니다.",
             ephemeral=True,
         )
 
