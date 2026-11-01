@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: kuro-guild-ranking
+    runtime: python
+    plan: free
+    rootDir: .
+    buildCommand: apt-get update && apt-get install -y fonts-noto-cjk && pip install -r requirements.txt
+    startCommand: python main.py
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: RANKING_DISCORD_BOT_TOKEN
+        sync: false
+      - key: RANKING_GUILD_ID
+        value: "1550465183380668527"
+      - key: RANKING_CHANNEL_ID
+        value: "1566541977929908355"
+      - key: RANKING_SUPABASE_URL
+        sync: false
+      - key: RANKING_SUPABASE_SERVICE_ROLE_KEY
+        sync: false
