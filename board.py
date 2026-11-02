@@ -9,7 +9,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 MAX_DAMAGE = 999_999_999_999_999
 MAX_LEVEL = 9999
-_DAMAGE_MESSAGE = re.compile(r"추뎀\s+([0-9]{1,15})\Z")
+_DAMAGE_MESSAGE = re.compile(r"추뎀\s+([0-9]{1,15})(?:조)?\Z")
 _LEVEL_MESSAGE = re.compile(r"레벨\s+([0-9]{1,4})\Z")
 ROW_COUNT = 30
 TEMPLATE_PATH = Path(__file__).with_name("샘플.png")
