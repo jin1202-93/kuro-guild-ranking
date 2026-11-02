@@ -16,7 +16,8 @@ BOARD_REFRESH_DEBOUNCE_SECONDS = 0.25
 
 
 def _is_admin(interaction, admin_role_id=None):
-    permissions = getattr(interaction.user, "guild_permissions", None)
+    user = getattr(interaction, "user", interaction)
+    permissions = getattr(user, "guild_permissions", None)
     has_server_permission = bool(
         permissions
         and (permissions.administrator or permissions.manage_guild)
@@ -27,8 +28,27 @@ def _is_admin(interaction, admin_role_id=None):
         return False
     return any(
         str(role.id) == str(admin_role_id)
-        for role in getattr(interaction.user, "roles", ())
+        for role in getattr(user, "roles", ())
     )
+
+
+def _is_rank_input(content):
+    return (
+        parse_damage_message(content) is not None
+        or parse_level_message(content) is not None
+    )
+
+
+async def _delete_input_message(message, fallback_reaction=None):
+    try:
+        await message.delete()
+    except discord.Forbidden:
+        logger.warning("Missing Manage Messages permission for ranking input")
+        if fallback_reaction is not None:
+            try:
+                await message.add_reaction(fallback_reaction)
+            except discord.HTTPException:
+                pass
 
 
 class RankingBot(commands.Bot):
@@ -343,7 +363,13 @@ def create_bot():
             or message.channel.id != bot.channel_id
         ):
             return
+        is_admin = _is_admin(message.author, bot.admin_role_id)
         level = parse_level_message(message.content)
+        damage = parse_damage_message(message.content)
+        if level is None and damage is None:
+            if not is_admin:
+                await _delete_input_message(message)
+            return
         if level is not None:
             try:
                 database_started = perf_counter()
@@ -355,7 +381,7 @@ def create_bot():
                     perf_counter() - database_started,
                 )
                 bot.schedule_board_refresh()
-                await message.delete()
+                await _delete_input_message(message, "✅")
             except ValueError:
                 await message.add_reaction("🔒")
                 try:
@@ -377,9 +403,6 @@ def create_bot():
                 except discord.HTTPException:
                     pass
             return
-        damage = parse_damage_message(message.content)
-        if damage is None:
-            return
         try:
             database_started = perf_counter()
             nickname = await asyncio.to_thread(
@@ -399,14 +422,7 @@ def create_bot():
                     pass
                 return
             bot.schedule_board_refresh()
-            try:
-                await message.delete()
-            except discord.Forbidden:
-                logger.exception("Could not delete a damage update message")
-                try:
-                    await message.add_reaction("✅")
-                except discord.HTTPException:
-                    pass
+            await _delete_input_message(message, "✅")
         except Exception:
             logger.exception("Could not update damage from a ranking message")
             try:

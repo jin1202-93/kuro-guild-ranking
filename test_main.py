@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
-from bot import RankingBot
+from bot import RankingBot, _delete_input_message, _is_admin, _is_rank_input
 from main import discord_health, health
 
 
@@ -81,6 +81,45 @@ class BoardRefreshSchedulingTests(unittest.IsolatedAsyncioTestCase):
 
         bot.refresh_board.assert_awaited_once()
         await bot.close()
+
+
+class RankingChannelInputPolicyTests(unittest.IsolatedAsyncioTestCase):
+    def test_only_supported_formats_are_rank_inputs(self):
+        self.assertTrue(_is_rank_input("추뎀 777"))
+        self.assertTrue(_is_rank_input("추뎀 777조"))
+        self.assertTrue(_is_rank_input("레벨 200"))
+        self.assertFalse(_is_rank_input("안녕하세요"))
+        self.assertFalse(_is_rank_input("추뎀"))
+        self.assertFalse(_is_rank_input("777"))
+
+    def test_ranking_admin_role_and_server_managers_are_exempt(self):
+        role_admin = SimpleNamespace(
+            guild_permissions=SimpleNamespace(administrator=False, manage_guild=False),
+            roles=[SimpleNamespace(id=42)],
+        )
+        server_manager = SimpleNamespace(
+            guild_permissions=SimpleNamespace(administrator=False, manage_guild=True),
+            roles=[],
+        )
+        server_admin = SimpleNamespace(
+            guild_permissions=SimpleNamespace(administrator=True, manage_guild=False),
+            roles=[],
+        )
+        regular_member = SimpleNamespace(
+            guild_permissions=SimpleNamespace(administrator=False, manage_guild=False),
+            roles=[],
+        )
+
+        self.assertTrue(_is_admin(role_admin, "42"))
+        self.assertTrue(_is_admin(server_manager, "42"))
+        self.assertTrue(_is_admin(server_admin, "42"))
+        self.assertFalse(_is_admin(regular_member, "42"))
+
+    async def test_invalid_input_deletion_does_not_send_a_dm(self):
+        message = SimpleNamespace(delete=AsyncMock(), author=Mock())
+        await _delete_input_message(message)
+        message.delete.assert_awaited_once()
+        message.author.send.assert_not_called()
 
 
 if __name__ == "__main__":
